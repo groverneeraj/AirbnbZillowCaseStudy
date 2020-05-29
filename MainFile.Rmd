@@ -1,0 +1,487 @@
+---
+title: "Capital One - Airbnb & Zillow Data Challenge"
+author: "Neeraj Grover"
+date: "December 26th, 2019"
+output:
+  pdf_document: default
+  pdf: default
+---
+#Capital One Data Challenge - Airbnb & Zillow Case Study
+## {.tabset}
+###Overview 
+####Business Problem
+A real estate company plans to purchase properties in New York to rent out short-term as part of their business model. The real estate company has already concluded that two bedroom properties are the most profitable; however, the company doesn't know which zip codes are the best to invest in.
+
+The objective of this Data Challenge is to analyze the Airbnb and Zillow datasets and suggest the most profitable zipcodes in New York where 2 bedroom propeties can be purchased and rented out on a short term.
+
+####Datasets
+Zillow dataset (cost data): Provides selling cost for 2 bedroom properties in each zipcode for various cities. The cost information is available from April 1996 to June 2017.
+
+Airbnb dataset (revenue data): Information about property listings in New York including location, number of bedrooms, reviews, price, availability, property description, etc. AirBnB is the medium through which the real estate company plans to lease out their investment property.
+
+####Assumptions
+- The investor will pay for the property in cash (i.e. no mortgage/interest rate will need to be accounted for).
+- The time value of money discount rate is 0% (i.e. $1 today is worth the same 100 years from now).
+- All properties and all square feet within each locale can be assumed to be homogeneous 
+- Occupancy rate of 75% throughout the year for Airbnb properties.
+- The company will put properties on rent every day throughout the year.
+- We assume that a booking usually last 3 days, we came to this conclusion after reading a study from Pillow.con, so we will consider Revenue Per Day as Price + (Cleaning Fee/3)
+
+####Process
+**Data Loading:** Loading the required dataset 
+
+**Data Quality:** The real world datasets contains several inconsistencies that will be dealt with and data needs to be filtered for NY.
+
+**Data Munging:** This section concentrates on linking and making the data homogeneous in terms of units, in a scalable manner.
+
+**Visual Analysis:** This sections provides graphs to help us analyze the most profitable zipcodes
+
+**Conclusions:** This chunk concentrates on providing further business insights into how the client can achieve greater profits by employing the suggested strategies.
+
+####Note
+Selling cost information of 2 bedroom properties is available only until June 2017. I perform analysis to fill in the missing cost values by inputing them using LOCF and NOCB : last observation carried forward and next observation carried backwards are two standard ways to achieve such imputations. This will help if we get a specific time-stamp of the airbnb data.
+
+I didn’t forecast the cost at a time point further in 2019.
+
+### Packages Used
+##### Loading Required Packages
+
+```{r, message=FALSE}
+
+
+# Store required packages in an array
+pkgs <- c(pkgs <- c("data.table","dplyr","ggplot2","tidyr","naniar",
+                    "GGally","Matrix","plotly","ggthemes"))
+
+# If package is not present, install the packages
+for (pkg in pkgs) {
+if (!(pkg %in% installed.packages()[, "Package"])) {
+install.packages(pkg)
+}
+}
+```
+
+```{r, message=FALSE} 
+library("data.table")
+library("dplyr")
+library("ggplot2")
+library("tidyr")
+library("ggthemes")
+library("GGally")
+library("Matrix")
+library("plotly")
+library("naniar")
+```
+### Data Loading
+
+##### Declarations
+The Airbnb data set to be loaded is listings.csv and the Zillow dataset is Zip_Zhvi_2bedroom.csv
+```{r}
+airbnbDir <- "listings.csv" # read csv file
+zillowDir <- "Zip_Zhvi_2bedroom.csv"
+```
+
+##### Reading From Files
+Loading files and replacing empty cell values with NA, so it helps with data cleaning later on
+
+```{r}
+airbnb <- fread(airbnbDir,header = TRUE, sep = "," , stringsAsFactors = FALSE, na.strings = c("","NA"))
+
+zillow <- fread(zillowDir,header = TRUE, sep = "," , stringsAsFactors = FALSE, na.strings = c("","NA"))
+```
+
+##### Functions
+Last observation carried forward impuated function:
+This function helps us in filling missing historical cost values in zillow data
+```{r}
+na.locf.default <- function(x) {
+   v <- !is.na(x)
+  return(c(NA, x[v])[cumsum(v)+1])
+}
+```
+
+
+### Data Quality
+#### Checks for Zillow
+##### 1. Missing Counts
+```{r}
+ds0<- data.frame(MissingCounts= apply(zillow,2, function (x) sum(is.na(x))/nrow(zillow)*100 ))
+summary(ds0$MissingCounts)
+
+```
+
+Missings are reasonable for the overall dataset. While the house price columns have missings with some time snapshots but that may not be an issue if missings are random accross time as that can be handled with imputations.
+
+##### 2. Missing Counts Across Time, Random or Not?
+```{r}
+ds1 <- rowSums(zillow[, c(8:262)],na.rm = TRUE)
+summary(ds1)
+```
+No NAs found, and that means we have some value for each city zipcode at some given point in time, and hence this is not a concern
+
+##### 3. Non-Negative Prices
+```{r}
+ds2<- apply(zillow[, c(8:262)],1,min,na.rm = TRUE)
+summary(ds2)
+
+```
+Result: As expected, prices are non-negative
+
+##### 4. Filtering Data for New York
+```{r}
+zillow_filtered <- zillow[which(zillow$State =="NY"),]
+nrow(zillow_filtered)
+```
+
+
+##### 5. Changing Column Name to Zipcode
+Changing zillow column name "RegionName" to "Zipcode", this will help in merging later
+```{r}
+setnames(zillow_filtered,"RegionName", "zipcode")
+```
+
+#### Checks for Airbnb
+```{r}
+dim(airbnb)
+```
+
+##### 1. State Corrections 
+```{r}
+table(airbnb$state)
+airbnb$state <- (gsub("New York","NY",airbnb$state))
+airbnb$state <- (gsub("ny","NY",airbnb$state))
+airbnb$state <- (gsub("Ny","NY",airbnb$state))
+
+```
+
+##### 2. Filtering Data for New York and 2 Bedroom Properties
+```{r}
+airbnb_filtered <- airbnb[which(airbnb$state=="NY" & airbnb$bedrooms == 2),]
+nrow(airbnb_filtered)
+```
+
+##### 3.Changing Zipcode Column Type
+Changing the column type to character for easier merging and uniform structure
+```{r}
+zillow_filtered$zipcode <- as.character(zillow_filtered$zipcode)
+airbnb_filtered$zipcode <- as.character(airbnb_filtered$zipcode)
+```
+
+
+### Data Munging
+Covers the data manipulations and new char creation to accomplish a scalable and accurate approach to handle larger data spanning multiple revenue snapshots (airbnb). 
+
+Please Note: Currently the airbnb data is available for a single snapshot in 2019. On ground problem can have multiple time stamps. So while merging datasets, we need to match cost and revenue by zipcode as well the snapshot for which they are applicable.
+
+Derive insights from the raw and derieved fields
+
+##### Zillow Data From Wide to Long Format
+```{r}
+# melt zillow_filtered data to have a row with price for each time point.
+# this allows for merge prices and cost accurate at zip and time level.
+zillow_filLong <- melt(zillow_filtered,id=c("RegionID","zipcode","City","State","Metro","CountyName","SizeRank"))
+setnames(zillow_filLong,"variable", "time")
+setnames(zillow_filLong,"value", "cost")
+
+# summary of cost in long data
+summary(zillow_filLong$cost)
+
+# filter relevant columns from zillow_filLong
+zillow_filLong<- zillow_filLong[,c("zipcode", "time", "cost")]
+```
+
+
+##### Imputations To Property Prices
+Why do this?
+This helps to scale analysis to be carried over a longer window of data wherein we are able to capture house prices over different times and aptly match them rentals, merging by a combination of zipcode and monthYear
+
+LOCF and NOCB : last observation carried forward and next observation carried backwards are two standard ways to achieve such imputations.
+
+```{r}
+zillow_filLong <- zillow_filLong[order(zipcode,time)]
+zillow_filLong <- zillow_filLong[, cost:= na.locf.default(cost), by=.(zipcode)]
+zillow_filLong <- zillow_filLong[order(zipcode,-time)]
+zillow_filLong <- zillow_filLong[, cost:= na.locf.default(cost), by=.(zipcode)]
+summary(zillow_filLong$cost)
+```
+
+Great! Now we have cost points for all times and zipcodes.
+
+##### Airbnb Data Dates Investigation
+```{r}
+table(airbnb_filtered$last_scraped,useNA = "ifany")
+table(airbnb_filtered$calendar_last_scraped,useNA = "ifany")
+table(airbnb_filtered$calendar_updated,useNA = "ifany")
+```
+
+Availability update is scattered over time, though the information of scrapping is pretty recent.
+In the Airbnb data we have the data of the last pull. We assume the prices shown are active at current time. 
+
+Further, since the cost/house price data is available till 2017, we assume it to be the same through 2019.
+
+In ideal case we may want to fetch the prices for 2017 from Airbnb to match the timelines of cost and revenue, but that comes at the cost of analysis losing its recency since it would be done on two year old scenario and things might have changed since OR we could use forecast techniques like ARIMA to arrive at prices of 2019
+
+
+
+```{r}
+# Recent data most applicable.
+zillow_filLong <- zillow_filLong[time=="2017-06"]
+```
+
+##### Merging Datasets Using Zipcode
+```{r}
+# merge two datasets by zipcode... since a single time overlapp is available
+merge_data <- merge(airbnb_filtered, zillow_filLong , by = "zipcode" )
+```
+
+##### Selecting Relevant Columns
+```{r}
+relevantColumns<-c("zipcode","street","neighbourhood_group_cleansed","latitude","longitude","square_feet"
+,"cost","price","cleaning_fee","minimum_nights"
+,"maximum_nights","number_of_reviews","review_scores_rating"
+,"time","property_type","room_type"
+,"bedrooms")
+
+merge_data <- merge_data[,relevantColumns,with=F]
+```
+
+##### Formatting Prices
+Formatting price and cleaning_fees columns to remove $ symbol and changing type to numeric
+```{r}
+merge_data$price <- (gsub("\\$","",merge_data$price))
+merge_data$price <- (gsub("\\,","",merge_data$price))
+merge_data$cleaning_fee <- (gsub("\\$","",merge_data$cleaning_fee))
+merge_data$cleaning_fee <- (gsub("\\,","",merge_data$cleaning_fee))
+
+merge_data$cleaning_fee <- as.numeric(merge_data$cleaning_fee)
+merge_data$price <- as.numeric(merge_data$price)
+```
+
+##### Missing Value Analysis
+
+```{r}
+gg_miss_var(merge_data, show_pct = TRUE) + labs(y = "Percentage")
+```
+
+##### Inputing Missing Values
+Impute Missing values into cleaning_fee column: from summary, the mean, median, and mode are almost the same values, hence mean is chosen
+
+```{r}
+summary(merge_data$cleaning_fee)
+
+merge_data <- merge_data[, cleaning_fee:= ifelse(is.na(cleaning_fee),mean(cleaning_fee,na.rm=TRUE),cleaning_fee)]
+
+summary(merge_data$cleaning_fee) #All NA's were inputed
+```
+
+##### Correct Price For Room Type
+Also, price of the daily rental in Revenue data is reflective of the space that is offered and not the entire property itself. The price must be specifically corrected to account for entire property to account the benefit.
+Assumption Made: If the property type == Private Room, it is multipled by number of bedrooms to account for overall price. Correction applied is returned to original price column.
+
+```{r}
+merge_data <- merge_data[, price:=ifelse(room_type == "Private room",price * bedrooms, price)]
+```
+
+##### Revenue Per Day
+We are assuming an average stay is for 3 days (infered this from a study from Pillow.com), so effectively a share of cleaning fee adds to the revenue every day. This variable will be used later in calcualting other variables for visualisations.
+
+```{r}
+merge_data[, revenuePerDay:= price+cleaning_fee/3]
+```
+
+##### Outlier Treatment
+While Outlier treatment is very useful in regression analysis, in a case like this its usefulness is limited to within group (zipcode) here.
+
+```{r}
+outliers <- quantile(merge_data$revenuePerDay,probs = c(0.01,0.99))
+
+merge_data[, revenuePerDay:= ifelse(revenuePerDay >=outliers[2],outliers[2],revenuePerDay)]
+merge_data[, revenuePerDay:= ifelse(revenuePerDay <=outliers[1],outliers[1],revenuePerDay)]
+summary(merge_data$revenuePerDay)
+
+outliers <- quantile(merge_data$cost,probs = c(0.01,0.99))
+
+merge_data[, cost:= ifelse(cost >=outliers[2],outliers[2],cost)]
+merge_data[, cost:= ifelse(cost <=outliers[1],outliers[1],cost)]
+summary(merge_data$cost)
+```
+
+##### Summary
+```{r}
+summary(merge_data)
+```
+
+##### Glimpse
+```{r}
+glimpse(merge_data)
+```
+
+### Final Analysis and Visualizations
+
+#### 1. Revenue To Cost Ratio
+
+In this approach, we are calculating Revenue/Cost Ratio for the first year, we are using our assumption that an average stay is for 3 days, so effectively a share of cleaning fee adds to the revenue every day. We are also considering a 75% occupancy rate throughout the year.
+
+We calulate this ratio at record level and then aggregate it at zipcode level, this helps us in identifying zipcodes which has better returns.
+
+```{r}
+merge_data[,revenueToCostRatio:= (revenuePerDay*365*.75)/cost * 100]
+
+merge_data_summary<- merge_data[, .(averageRevenueToCostRatio=mean(revenueToCostRatio), AvgCost= mean(cost), count= length(cost)), by=.(zipcode)]
+
+rentalReturn<- ggplot(merge_data_summary, aes(x = AvgCost, y = averageRevenueToCostRatio)) +geom_point(aes(colour=zipcode, size= count)) + labs(y = "Average Revenue To Cost Ratio", x = "Average Cost") + scale_x_continuous(labels = scales::comma) + theme_clean()
+ggplotly(rentalReturn)
+
+```
+
+ - Lower cost and highest return are found in the leftmost corner, thus establishing that highest valued properties can be avoided as they dont lead to higher returns. 
+ - The size of point signifies how many properties the corresponding zipcode has, we can see that 10025 has the best ratio along with significiant amount of properties
+ - We need to be cautious of lower counts in those neighbourhoods as the evidence could be not that significant/prone to variability or a non statistical reason of less conducive environment.  
+
+##### Top Zipcodes Based On Revenue Ratio
+```{r}
+merge_data_summary <- merge_data_summary[order(-averageRevenueToCostRatio)]
+topRentalReturn <- head(unique(merge_data_summary$zipcode),15)
+print(topRentalReturn)
+```
+
+#### 2. Years to Profit Analysis (Payback Period)
+
+The first approach considered the revenue (rent) generated from the property with the regards to the cost in a year. In this approach, we consider that property is going to be held indefinitely we will calculate the number of years it will take for the property to breakeven i.e. the number of years it will take to recover the initial investment.
+
+Setting our variables (We assumed occupancy rate of 75% throughout the year for properties here)
+```{r}
+merge_data[,totalAnnualIncome:= revenuePerDay*365*.75]
+merge_data[,yearsToProfit:= cost/totalAnnualIncome]
+```
+
+
+```{r}
+
+merge_data_year_return<- merge_data[, .(averageYearsToProfit=mean(yearsToProfit), AvgCost= mean(cost)), by=.(zipcode)]
+
+yearReturn<- ggplot(merge_data_year_return, aes(x = reorder(zipcode, -averageYearsToProfit), y = averageYearsToProfit)) + geom_bar(stat="identity", width = .3) + labs(y = "Average Years to Profit", x = "Zip Code") + coord_flip() + theme_clean()
+ggplotly(yearReturn,tooltip = c("zipcode","averageYearsToProfit"))
+```
+
+As we can the properties on the top are the quickest to reach their breakeven point
+
+##### Top Zipcodes Based On Payback Period
+```{r}
+merge_data_year_return <- merge_data_year_return[order(averageYearsToProfit)]
+topYearReturn <- head(unique(merge_data_year_return$zipcode),15)
+print(topYearReturn)
+```
+
+#### 3. Property Appreciation Analysis
+
+Property Appreciation or Real estate appreciation is a simple concept. It refers to how the value of an investment property increases with time. 
+
+As we know, property itself can appreciate/depreciate in value, this helps in understanding which properties would be a better investment.
+
+Creating a dataset with avg prices across years across pincodes (long format)
+```{r}
+
+zillow_filLong2 <- melt(zillow_filtered,id=c("RegionID","zipcode","City","State","Metro","CountyName","SizeRank"))
+zillow_filLong2[, year:=substr(variable,1,4) ]
+annual_cost <- zillow_filLong2[,.(avg_value=mean(value,na.rm=TRUE)) , by=.(year, zipcode)]
+
+h<-as.data.table(table(is.nan(annual_cost$avg_value),annual_cost$year))
+h<- h[order(-N)]
+print(head(h,20))
+
+# no missings since 2011 
+annual_cost <- annual_cost[year>=2011,]
+
+annual_cost <- merge(annual_cost, unique(airbnb_filtered[,c("zipcode","neighbourhood_group_cleansed"),with=F]))
+
+# plotting the results
+costPlot <-   ggplot(annual_cost,aes(x = year,
+                                     y = avg_value,
+                                     group = zipcode,
+                                     colour = neighbourhood_group_cleansed
+)) + labs(y = "Average Value", x = "Year") + geom_line() + geom_point() + scale_y_continuous(labels = scales::comma) + theme_clean()
+ggplotly(costPlot)
+
+
+```
+
+There are steep lines across different price ranges so a more meaningful analysis is to generate return on prices overtime
+
+Rate of Return on property from Price Growth over 2011-17
+```{r}
+# create a dataset with avg house prices across years across pincodes (wide format)
+annual_cost_wide <- dcast.data.table(zipcode+neighbourhood_group_cleansed ~ year, data= annual_cost, value.var = "avg_value")
+annual_cost_wide[, growthRate:= (`2017`/`2011`-1)*100]
+annual_cost_wide$zipcode <- as.character(annual_cost_wide$zipcode)
+
+growthPlot<- ggplot(annual_cost_wide, aes(x = `2017`, y = growthRate, colour=zipcode)) + geom_point()+ scale_y_continuous(labels = scales::comma) +scale_x_continuous(labels = scales::comma)+ labs(y = "Growth Rate", x = "2017 Prices") + theme_clean()
+ggplotly(growthPlot)
+```
+
+Shows that mid range priced propery zones offer highest return in terms of property valuation.
+
+#### Top Zipcodes By Property Appreciation
+```{r}
+
+annual_cost_wide<- annual_cost_wide[order(-growthRate)]
+#checkif these are available in revenue data
+topGrowing <- unique(annual_cost_wide$zipcode[annual_cost_wide$zipcode %in% merge_data$zipcode])
+topGrowing <- head(topGrowing,15)
+print(topGrowing)
+```
+
+A combination of revenue and property price growth potential has to be considered when arriving at a decision.
+
+```{r}
+topRev <- intersect(topYearReturn,topRentalReturn)
+print(topRev)
+topRevGrowing <- intersect(topRev,topGrowing)
+print(topRevGrowing)
+
+```
+
+#### Secondary Criteria
+
+##### 4. Budget Constraint
+
+Lower priced property that comes high in revenue criteria is preferred since it lowers the potential cost of funding and investment at risk
+```{r}
+merge_data_summary_sec <- merge_data_summary[zipcode %in% topRev]
+
+cheapPricePlot<- ggplot(merge_data_summary_sec, aes(x = averageRevenueToCostRatio, y = AvgCost, colour=zipcode)) + geom_point()+ scale_y_continuous(labels = scales::comma) +scale_x_continuous(labels = scales::comma) + labs(y = "Avg Price", x = "Average Revenue to Cost Ratio") + theme_clean()
+
+ggplotly(cheapPricePlot)
+```
+
+```{r}
+merge_data_summary_sec<- merge_data_summary_sec[order(AvgCost)]
+topCheapBuys <- head(unique(merge_data_summary_sec$zipcode),15)
+print(topCheapBuys)
+```
+
+###Conclusion
+
+####Top Zipcodes Based on Our Analysis
+
+```{r}
+zipCodeSFinal <- intersect(topRevGrowing,topCheapBuys)
+print(zipCodeSFinal)
+```
+
+#### Top 5 Zipcode Choices :
+ 
+- Zipcode **10036** in Manhattan shows up in all 3 criteria we used to measure the best zipcodes, this is mid-size investment that will yield high and has a good property growthrate.
+- Zipcode **10025** in Manhattan is not far behind, it is also present in all 3 measures and is cheaper than 10036 with a better growthRate, this one is the best property to buy in Manhattan
+
+- Zipcode **11201** in Brookyln is great option, it perfomed similar to the aforementioned properties in all analysis but had the 3rd highest growthRate
+- Zipcode **11215** in Brooklyn is very similar to 11201 in terms of performance but it is cheaper than the aformentioned
+- Zipcode **11231** in Brooklyn is a lot similar to zipcode 11215 in that the avg. cost of a 2 bedroom property and the avg. revenue per year obtained from a property are pretty close.
+
+- Zipcode **11434** in Queens breakevens the quickest of the lot reccomened here, since the properties are cheaper, the only downside is below average growthRate
+
+#### Future Steps
+1. Use ARIMA to predict values after June, 2017
+2. Introduce seasonality and weather data to understand trends occupancy throughout the year.
+3. Use Stasticial methods to to understand occupancy and availability better
+4. Due to time constraints and scope of this projec - some of the coding practices such as memory management, variable nomenclature and other markdown specific functionalities were ignored. This would be automatic first step in the future scope of work.
