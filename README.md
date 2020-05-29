@@ -1,0 +1,2 @@
+# AirbnbZillowCaseStudy
+A real estate company plans to purchase properties in New York to rent out short-term as part of their business model. The real estate company has already concluded that two bedroom properties are the most profitable; however, the company doesn’t know which zip codes are the best to invest in. The objective of this study is to analyze the Airbnb and Zillow datasets and suggest the most profitable zipcodes in New York where 2 bedroom propeties can be purchased and rented out on a short term.
